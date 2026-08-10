@@ -76,7 +76,7 @@ def synchroniser_restant_budgets():
 def generer_pdf_budget(df_synthese_brute, service_nom, annee):
     """
     Génère un rapport PDF officiel structuré par section (Fonctionnement / Investissement)
-    avec sous-totaux et mise en page aérée dans la RAM.
+    avec sous-totaux par section et GRAND TOTAL GÉNÉRAL CONSOLIDÉ.
     """
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -95,6 +95,10 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
     style_cellule_bold = ParagraphStyle('CelluleTextBold', fontName='Helvetica-Bold', fontSize=8, textColor=colors.HexColor('#111827'))
     style_cellule_montant = ParagraphStyle('CelluleMontant', fontName='Helvetica', fontSize=8, textColor=colors.HexColor('#1F2937'), alignment=2)
     style_cellule_montant_bold = ParagraphStyle('CelluleMontantBold', fontName='Helvetica-Bold', fontSize=8, textColor=colors.HexColor('#111827'), alignment=2)
+    
+    # Styles spécifiques pour le Grand Total Général
+    style_grand_total_label = ParagraphStyle('GrandTotalLabel', fontName='Helvetica-Bold', fontSize=9, textColor=colors.white)
+    style_grand_total_montant = ParagraphStyle('GrandTotalMontant', fontName='Helvetica-Bold', fontSize=9, textColor=colors.white, alignment=2)
 
     # --- EN-TÊTE DU DOCUMENT ---
     elements.append(Paragraph(f"<b>PRÉPARATION BUDGÉTAIRE - ANNÉE {annee}</b>", style_titre))
@@ -166,7 +170,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
             Paragraph(f"{tot_rest:,.0f} XPF".replace(",", " "), style_cellule_montant_bold)
         ])
 
-        # Redistribution des 26.7 cm de largeur disponible
         largeurs = [2.5*cm, 2.5*cm, 9.7*cm, 3.0*cm, 3.0*cm, 3.0*cm, 3.0*cm]
         tableau = Table(donnees_pdf, colWidths=largeurs, repeatRows=1)
         
@@ -189,7 +192,7 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
 
         tableau.setStyle(style_table)
         elements_section.append(tableau)
-        elements_section.append(Spacer(1, 12))
+        elements_section.append(Spacer(1, 10))
         return elements_section
 
     # --- SÉPARATION ET CONSTRUCTION DES SECTIONS ---
@@ -198,6 +201,38 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
 
     elements.extend(construire_tableau_section(df_fonc, "🔄 SECTION FONCTIONNEMENT"))
     elements.extend(construire_tableau_section(df_inv, "🏗️ SECTION INVESTISSEMENT"))
+
+    # --- AJOUT DU GRAND TOTAL GÉNÉRAL CONSOLIDÉ ---
+    if not df_synthese_brute.empty:
+        gt_initial = sum(to_clean_float(v) for v in df_synthese_brute['Total_Initial'])
+        gt_ajust = sum(to_clean_float(v) for v in df_synthese_brute['Total_Ajustement'])
+        gt_glob = sum(to_clean_float(v) for v in df_synthese_brute['Enveloppe_Globale'])
+        gt_rest = sum(to_clean_float(v) for v in df_synthese_brute['Total_Restant'])
+
+        donnees_grand_total = [[
+            Paragraph("📊 <b>TOTAL GÉNÉRAL CONSOLIDÉ (FONCTIONNEMENT + INVESTISSEMENT)</b>", style_grand_total_label),
+            Paragraph("", style_cellule),
+            Paragraph("", style_cellule),
+            Paragraph(f"{gt_initial:,.0f} XPF".replace(",", " "), style_grand_total_montant),
+            Paragraph(f"{gt_ajust:,.0f} XPF".replace(",", " "), style_grand_total_montant),
+            Paragraph(f"{gt_glob:,.0f} XPF".replace(",", " "), style_grand_total_montant),
+            Paragraph(f"{gt_rest:,.0f} XPF".replace(",", " "), style_grand_total_montant)
+        ]]
+
+        largeurs = [2.5*cm, 2.5*cm, 9.7*cm, 3.0*cm, 3.0*cm, 3.0*cm, 3.0*cm]
+        tab_grand_total = Table(donnees_grand_total, colWidths=largeurs)
+        tab_grand_total.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E3A8A')),
+            ('SPAN', (0, 0), (2, 0)),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#1E3A8A')),
+        ]))
+
+        elements.append(Spacer(1, 5))
+        elements.append(tab_grand_total)
 
     # Visa du Responsable
     elements.append(Spacer(1, 15))
