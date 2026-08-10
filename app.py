@@ -259,6 +259,18 @@ service_utilisateur = user_actuel.get("service", "NON DEFINI")
 with st.sidebar:
     st.write(f"👤 **{user_actuel.get('nom')}**")
     st.caption(f"Rôle : **{role_utilisateur}** | Service : **{service_utilisateur}**")
+    
+    st.divider()
+    
+    # 🎯 SÉLECTEUR D'ANNÉE BUDGETAIRE DYNAMIQUE
+    annee_active = st.selectbox(
+        "📅 Année budgétaire :",
+        options=[2026, 2027, 2028, 2029, 2030],
+        index=1  # Index 1 = sélectionne 2027 par défaut
+    )
+    
+    st.divider()
+    
     if st.button("🚪 Se déconnecter"):
         st.session_state["connecte"] = False
         st.session_state["user_info"] = None
