@@ -4,11 +4,16 @@
 import datetime
 from zoneinfo import ZoneInfo
 import io
-import bcrypt
+
 import pandas as pd
 import streamlit as st
-from supabase import Client, create_client
 
+# Imports du SDK Cadre Enterprise
+import cadre_entreprise.auth as auth
+import cadre_entreprise.ui as ui
+from cadre_entreprise.database import supabase
+
+# ReportLab pour l'exportation PDF
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -16,40 +21,21 @@ from reportlab.lib.units import cm
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # Configuration de la page Streamlit (Mode Large)
-st.set_page_config(page_title="Gestion Budgétaire", layout="wide", page_icon="💰")
+st.set_page_config(page_title="Gestion Budgétaire 2027", layout="wide", page_icon="💰")
 
 # =====================================================================
-# 2. INITIALISATION SUPABASE (DEPUIS secrets.toml)
+# 2. SÉCURITÉ & AUTHENTIFICATION (VIA SDK)
 # =====================================================================
-try:
-    URL_SUPABASE = st.secrets["SUPABASE_URL"]
-    CLE_SUPABASE = st.secrets["SUPABASE_KEY"]
-    supabase: Client = create_client(URL_SUPABASE, CLE_SUPABASE)
-except Exception as e:
-    st.error(f"Erreur de connexion aux secrets Supabase : {e}")
+if not auth.est_connecte():
+    ui.afficher_ecran_login(nom_application="Gestion Budgétaire 2027", icone="💰")
     st.stop()
 
-# Année active de travail
-annee_active = 2026
+# Barre latérale standardisée (Profil + Lien vers le Portail Central)
+ui.afficher_sidebar_standard()
 
 # =====================================================================
-# 3. FONCTIONS SÉCURITÉ & FONCTIONNELLES
+# 3. FONCTIONS MÉTIER ET GÉNÉRATION PDF
 # =====================================================================
-def hacher_mot_de_passe(mdp_texte_clair: str) -> str:
-    """Transforme un mot de passe en texte clair en un hash irréversible."""
-    bytes_mdp = mdp_texte_clair.encode("utf-8")
-    sel = bcrypt.gensalt()
-    return bcrypt.hashpw(bytes_mdp, sel).decode("utf-8")
-
-def verifier_mot_de_passe(mdp_saisi_texte_clair: str, mdp_hache_bdd: str) -> bool:
-    """Vérifie si le mot de passe saisi correspond au hash BCRYPT stocké."""
-    try:
-        bytes_saisi = mdp_saisi_texte_clair.encode("utf-8")
-        bytes_bdd = mdp_hache_bdd.encode("utf-8")
-        return bcrypt.checkpw(bytes_saisi, bytes_bdd)
-    except Exception:
-        return False
-
 def synchroniser_restant_budgets():
     """Recalcule dynamiquement les montants restants selon les devis acceptés."""
     try:
@@ -97,7 +83,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
     style_cellule_montant = ParagraphStyle('CelluleMontant', fontName='Helvetica', fontSize=8, textColor=colors.HexColor('#1F2937'), alignment=2)
     style_cellule_montant_bold = ParagraphStyle('CelluleMontantBold', fontName='Helvetica-Bold', fontSize=8, textColor=colors.HexColor('#111827'), alignment=2)
     
-    # Styles spécifiques pour le Grand Total Général
     style_grand_total_label = ParagraphStyle('GrandTotalLabel', fontName='Helvetica-Bold', fontSize=9, textColor=colors.white)
     style_grand_total_montant = ParagraphStyle('GrandTotalMontant', fontName='Helvetica-Bold', fontSize=9, textColor=colors.white, alignment=2)
 
@@ -109,7 +94,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
     elements.append(Spacer(1, 8))
     elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1E3A8A'), spaceAfter=10))
 
-    # Helper de nettoyage sécurisé des nombres
     def to_clean_float(val):
         if isinstance(val, (int, float)):
             return float(val)
@@ -119,7 +103,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
         except ValueError:
             return 0.0
 
-    # Function helper pour générer le tableau d'une section
     def construire_tableau_section(df_section, titre_section):
         elements_section = []
         if df_section.empty:
@@ -139,7 +122,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
         
         donnees_pdf = [en_tetes]
 
-        # Calcul des sous-totaux de la section
         tot_initial = sum(to_clean_float(v) for v in df_section['Total_Initial'])
         tot_ajust = sum(to_clean_float(v) for v in df_section['Total_Ajustement'])
         tot_glob = sum(to_clean_float(v) for v in df_section['Enveloppe_Globale'])
@@ -161,7 +143,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
                 Paragraph(f"{m_rest:,.0f} XPF".replace(",", " "), style_cellule_montant)
             ])
 
-        # LIGNE DE TOTAL DE LA SECTION
         donnees_pdf.append([
             Paragraph("<b>TOTAL SECTION</b>", style_cellule_bold),
             Paragraph("", style_cellule),
@@ -197,14 +178,12 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
         elements_section.append(Spacer(1, 10))
         return elements_section
 
-    # --- SÉPARATION ET CONSTRUCTION DES SECTIONS ---
     df_fonc = df_synthese_brute[df_synthese_brute['type_budget'] == 'FONCTIONNEMENT']
     df_inv = df_synthese_brute[df_synthese_brute['type_budget'] == 'INVESTISSEMENT']
 
     elements.extend(construire_tableau_section(df_fonc, "🔄 SECTION FONCTIONNEMENT"))
     elements.extend(construire_tableau_section(df_inv, "🏗️ SECTION INVESTISSEMENT"))
 
-    # --- AJOUT DU GRAND TOTAL GÉNÉRAL CONSOLIDÉ ---
     if not df_synthese_brute.empty:
         gt_initial = sum(to_clean_float(v) for v in df_synthese_brute['Total_Initial'])
         gt_ajust = sum(to_clean_float(v) for v in df_synthese_brute['Total_Ajustement'])
@@ -236,7 +215,6 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
         elements.append(Spacer(1, 5))
         elements.append(tab_grand_total)
 
-    # Visa du Responsable
     elements.append(Spacer(1, 15))
     elements.append(Paragraph("<b>Visa du Responsable Budgétaire :</b>", style_sous_titre))
 
@@ -245,76 +223,23 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
     return buffer.getvalue()
 
 # =====================================================================
-# 4. AUTHENTIFICATION & SESSION
+# 4. INITIALISATION UTILISATEUR & PRÉPARATION SEMAINE/ANNÉE
 # =====================================================================
-if "connecte" not in st.session_state:
-    st.session_state["connecte"] = False
-    st.session_state["user_info"] = None
-
-if not st.session_state["connecte"]:
-    st.title("🔐 Connexion - Gestion Budgétaire")
-    with st.form("form_login"):
-        col1, col2 = st.columns(2)
-        with col1:
-            login_saisi = st.text_input("Identifiant").lower().strip()
-        with col2:
-            mdp_saisi = st.text_input("Mot de passe", type="password")
-        btn_connexion = st.form_submit_button("Se connecter")
-
-    if btn_connexion:
-        if login_saisi == "" or mdp_saisi == "":
-            st.warning("⚠️ Veuillez remplir tous les champs.")
-        else:
-            try:
-                res = supabase.table("Utilisateur").select("*").eq("login", login_saisi).execute()
-                utilisateurs_trouves = res.data
-
-                if len(utilisateurs_trouves) > 0:
-                    user_bdd = utilisateurs_trouves[0]
-                    mdp_hache_bdd = user_bdd.get("mdp", "")
-
-                    if verifier_mot_de_passe(mdp_saisi, mdp_hache_bdd):
-                        st.session_state["connecte"] = True
-                        st.session_state["user_info"] = user_bdd
-                        st.success(f"Bienvenue {user_bdd.get('nom')} !")
-                        st.rerun()
-                    else:
-                        st.error("❌ Mot de passe incorrect.")
-                else:
-                    st.error("❌ Identifiant inconnu.")
-            except Exception as e:
-                st.error(f"Erreur de connexion : {e}")
-    st.stop()
-
-# =====================================================================
-# 5. BARRE LATÉRALE & PRÉPARATION DE LA SESSION
-# =====================================================================
-user_actuel = st.session_state.get("user_info", {})
+user_actuel = auth.get_user_info()
 role_utilisateur = str(user_actuel.get("role", "")).upper().strip()
 service_utilisateur = user_actuel.get("service", "NON DEFINI")
 
+# Sélecteur d'année dans la barre latérale (Sidebar)
 with st.sidebar:
-    st.write(f"👤 **{user_actuel.get('nom')}**")
-    st.caption(f"Rôle : **{role_utilisateur}** | Service : **{service_utilisateur}**")
-    
     st.divider()
-    
-    # 🎯 SÉLECTEUR D'ANNÉE BUDGETAIRE DYNAMIQUE
     annee_active = st.selectbox(
         "📅 Année budgétaire :",
         options=[2026, 2027, 2028, 2029, 2030],
-        index=1  # Index 1 = sélectionne 2027 par défaut
+        index=1  # Sélectionne 2027 par défaut
     )
-    
-    st.divider()
-    
-    if st.button("🚪 Se déconnecter"):
-        st.session_state["connecte"] = False
-        st.session_state["user_info"] = None
-        st.rerun()
 
 # =====================================================================
-# 6. DÉFINITION DES ONGLETS PAR RÔLE
+# 5. DÉFINITION DES ONGLETS PAR RÔLE
 # =====================================================================
 if role_utilisateur == "ADMIN":
     onglet_budgets, onglet_devis, onglet_referentiel, onglet_admin = st.tabs([
@@ -346,17 +271,15 @@ with onglet_budgets:
             service_filtre = service_utilisateur
             st.info(f"🔒 Périmètre restreint : **{service_filtre}**")
 
-    # Lecture des données Supabase
     try:
         reponse_lc = supabase.table("Ligne_Comptable").select("*").execute()
-        donnees_lc_brutes = reponse_lc.data
+        donnees_lc_brutes = reponse_lc.data or []
         reponse_budgets = supabase.table("Budget").select("*").eq("annee", annee_active).order("code_lc").execute()
-        donnees_budgets = reponse_budgets.data
+        donnees_budgets = reponse_budgets.data or []
     except Exception as erreur_lecture:
         st.error(f"Erreur de lecture de la base : {erreur_lecture}")
         donnees_lc_brutes, donnees_budgets = [], []
 
-    # Filtrage des Lignes Comptables selon le périmètre
     if service_filtre != "TOUS":
         donnees_lc = [lc for lc in donnees_lc_brutes if lc.get("service") == service_filtre]
     else:
@@ -366,7 +289,6 @@ with onglet_budgets:
     dict_types = {lc['code_lc']: lc['type_budget'] for lc in donnees_lc}
     dict_services = {lc['code_lc']: lc.get('service', 'NON DÉFINI') for lc in donnees_lc_brutes}
 
-    # Synthèse Consolidée Pandas
     st.subheader(f"📊 Vue Consolidée ({service_filtre})")
     
     if len(donnees_budgets) > 0 and len(donnees_lc_brutes) > 0:
@@ -378,7 +300,6 @@ with onglet_budgets:
             df_complet = df_complet[df_complet['service'] == service_filtre]
             
         if not df_complet.empty:
-            # DataFrame BRUT avec des vrais nombres (pour les calculs et le PDF)
             synthese = df_complet.groupby(['service', 'code_lc', 'libelle', 'type_budget']).agg(
                 Total_Initial=('montant_initial', 'sum'),
                 Total_Ajustement=('montant_ajustement', 'sum'),
@@ -387,7 +308,6 @@ with onglet_budgets:
             
             synthese['Enveloppe_Globale'] = synthese['Total_Initial'] + synthese['Total_Ajustement']
             
-            # DataFrame FORMATÉ (uniquement pour l'affichage à l'écran Streamlit)
             synthese_affichage = synthese.copy()
             for col in ['Total_Initial', 'Total_Ajustement', 'Enveloppe_Globale', 'Total_Restant']:
                 synthese_affichage[col] = synthese_affichage[col].apply(lambda x: f"{x:,.0f} XPF".replace(",", " "))
@@ -410,7 +330,6 @@ with onglet_budgets:
                 st.markdown("##### 🏗️ SECTION INVESTISSEMENT")
                 st.dataframe(synthese_inv, use_container_width=True, hide_index=True, column_config=config_cols)
 
-            # Bouton PDF : Transmission du DataFrame 'synthese' (avec nombres bruts)
             st.markdown("##### 📄 Exportation Officielle")
             pdf_bytes = generer_pdf_budget(synthese, service_filtre, annee_active)
             st.download_button(
@@ -425,7 +344,6 @@ with onglet_budgets:
 
     st.divider()
 
-    # Formulaire d'ajout
     st.subheader(f"➕ Déclarer un détail budgétaire pour {annee_active}")
     if len(dict_libelles) > 0:
         with st.form("formulaire_budget", clear_on_submit=True):
@@ -458,7 +376,6 @@ with onglet_budgets:
 
     st.divider()
 
-    # Tableau d'édition des budgets
     st.subheader(f"📋 Détail des opérations ({service_filtre})")
     if len(donnees_budgets) > 0:
         for b in donnees_budgets:
@@ -522,7 +439,7 @@ with onglet_devis:
     st.header(f"📝 Gestion des Devis ({service_filtre})")
     try:
         reponse_devis = supabase.table("Devis").select("*").eq("annee", annee_active).order("id").execute()
-        donnees_devis = reponse_devis.data
+        donnees_devis = reponse_devis.data or []
     except Exception as e:
         st.error(f"Erreur devis : {e}")
         donnees_devis = []
@@ -621,7 +538,6 @@ if role_utilisateur == "ADMIN":
     with onglet_referentiel:
         st.header("⚙️ Gestion des Référentiels")
 
-        # 1. Services
         st.subheader("1. Référentiel des Services")
         with st.form("form_service", clear_on_submit=True):
             c1, c2 = st.columns(2)
@@ -637,11 +553,10 @@ if role_utilisateur == "ADMIN":
                     st.rerun()
                 except Exception as e: st.error(f"Erreur : {e}")
 
-        # 2. Lignes Comptables
         st.divider()
         st.subheader("2. Nomenclature Comptable (Lignes LC)")
         try:
-            liste_s = [s["code_service"] for s in supabase.table("Service").select("code_service").execute().data]
+            liste_s = [s["code_service"] for s in (supabase.table("Service").select("code_service").execute().data or [])]
         except Exception: liste_s = []
 
         with st.form("form_lc", clear_on_submit=True):
@@ -667,7 +582,7 @@ if role_utilisateur == "ADMIN":
     with onglet_admin:
         st.header("👥 Gestion des Comptes Utilisateurs")
         try:
-            services_bdd = [s["code_service"] for s in supabase.table("Service").select("code_service").execute().data]
+            services_bdd = [s["code_service"] for s in (supabase.table("Service").select("code_service").execute().data or [])]
         except Exception: services_bdd = []
         options_services_user = ["TOUS"] + services_bdd
 
@@ -688,7 +603,8 @@ if role_utilisateur == "ADMIN":
             if nouveau_login == "" or nouveau_mdp == "" or nouveau_nom == "":
                 st.warning("⚠️ Tous les champs sont obligatoires.")
             else:
-                mdp_securise = hacher_mot_de_passe(nouveau_mdp)
+                # Utilisation du hachage via le SDK Cadre Enterprise
+                mdp_securise = auth.hacher_mot_de_passe(nouveau_mdp)
                 nouvel_u = {
                     "login": nouveau_login, "mdp": mdp_securise,
                     "nom": nouveau_nom, "role": nouveau_role, "service": nouveau_service
@@ -703,7 +619,7 @@ if role_utilisateur == "ADMIN":
 
         st.subheader("📋 Liste des Comptes Actifs")
         try:
-            donnees_users = supabase.table("Utilisateur").select("*").order("login").execute().data
+            donnees_users = supabase.table("Utilisateur").select("*").order("login").execute().data or []
         except Exception: donnees_users = []
 
         if len(donnees_users) > 0:
@@ -730,7 +646,7 @@ if role_utilisateur == "ADMIN":
                         for idx, modifs in j_u["edited_rows"].items():
                             log_mod = donnees_users[int(idx)]["login"]
                             if "mdp" in modifs and modifs["mdp"].strip() != "":
-                                modifs["mdp"] = hacher_mot_de_passe(modifs["mdp"])
+                                modifs["mdp"] = auth.hacher_mot_de_passe(modifs["mdp"])
                             supabase.table("Utilisateur").update(modifs).eq("login", log_mod).execute()
                     st.success("✅ Comptes mis à jour !")
                     st.rerun()

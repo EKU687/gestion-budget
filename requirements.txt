@@ -3,3 +3,4 @@ supabase
 pandas
 bcrypt
 reportlab
+git+https://github.com/eku687/cadre-entreprise.git
