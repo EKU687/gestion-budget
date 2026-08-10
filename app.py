@@ -2,6 +2,7 @@
 # 1. IMPORTS & MODULES
 # =====================================================================
 import datetime
+from zoneinfo import ZoneInfo
 import io
 import bcrypt
 import pandas as pd
@@ -102,7 +103,8 @@ def generer_pdf_budget(df_synthese_brute, service_nom, annee):
 
     # --- EN-TÊTE DU DOCUMENT ---
     elements.append(Paragraph(f"<b>PRÉPARATION BUDGÉTAIRE - ANNÉE {annee}</b>", style_titre))
-    date_jour = datetime.datetime.now().strftime("%d/%m/%Y à %H:%M")
+    fuseau_nc = ZoneInfo("Pacific/Noumea")
+    date_jour = datetime.datetime.now(fuseau_nc).strftime("%d/%m/%Y à %H:%M")
     elements.append(Paragraph(f"Périmètre : <b>{service_nom}</b> | Édité le : {date_jour}", style_sous_titre))
     elements.append(Spacer(1, 8))
     elements.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor('#1E3A8A'), spaceAfter=10))
